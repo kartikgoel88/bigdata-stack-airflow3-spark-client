@@ -6,7 +6,7 @@ A containerized Apache Airflow 3 setup with minimal Spark client, designed to wo
 
 This project provides:
 
-- **Apache Airflow 3.0.2**: Workflow orchestration platform
+- **Apache Airflow 3.0.2**: Workflow orchestration plaform
   - API Server (Web UI)
   - DAG Processor
   - Scheduler
