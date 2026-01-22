@@ -1,0 +1,92 @@
+# Airflow 3 with minimal Spark client
+ARG AIRFLOW_VERSION
+ARG AIRFLOW_PYTHON_VERSION
+ARG JAVA_VERSION
+FROM apache/airflow:${AIRFLOW_VERSION}-python${AIRFLOW_PYTHON_VERSION}
+
+USER root
+
+# Build arguments (must be redeclared after FROM to be available in RUN commands)
+ARG JAVA_VERSION
+ARG SPARK_VERSION
+ARG SPARK_HOME
+ARG JAVA_HOME_PATH
+ARG PYSPARK_PYTHON
+ARG PYSPARK_DRIVER_PYTHON
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-client \
+    openjdk-${JAVA_VERSION}-jre-headless \
+    wget \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set environment variables
+ENV SPARK_VERSION=${SPARK_VERSION} \
+    SPARK_HOME=${SPARK_HOME} \
+    SPARK_CONF_DIR=${SPARK_HOME}/conf \
+    JAVA_HOME=${JAVA_HOME_PATH} \
+    PYSPARK_PYTHON=${PYSPARK_PYTHON} \
+    PYSPARK_DRIVER_PYTHON=${PYSPARK_DRIVER_PYTHON} \
+    PATH=$PATH:${SPARK_HOME}/bin:${SPARK_HOME}/sbin
+
+# Create Spark home directory
+RUN mkdir -p ${SPARK_HOME}
+
+# Copy Spark client files (minimal - just libraries and binaries needed for client)
+# Note: This assumes Spark tarball is in downloads/ directory
+COPY downloads/spark-${SPARK_VERSION}-bin-hadoop3.tar.gz /tmp/
+
+# Extract Spark and copy essential client components
+RUN set -eux && \
+    cd /tmp && \
+    tar -xzf spark-${SPARK_VERSION}-bin-hadoop3.tar.gz && \
+    # Copy essential Spark client components (minimal installation)
+    cp -r spark-${SPARK_VERSION}-bin-hadoop3/bin ${SPARK_HOME}/ && \
+    cp -r spark-${SPARK_VERSION}-bin-hadoop3/sbin ${SPARK_HOME}/ && \
+    cp -r spark-${SPARK_VERSION}-bin-hadoop3/jars ${SPARK_HOME}/ && \
+    cp -r spark-${SPARK_VERSION}-bin-hadoop3/python ${SPARK_HOME}/ && \
+    cp -r spark-${SPARK_VERSION}-bin-hadoop3/conf ${SPARK_HOME}/ && \
+    cp -r spark-${SPARK_VERSION}-bin-hadoop3/lib ${SPARK_HOME}/ && \
+    # Copy any root-level Spark scripts if they exist
+    cp spark-${SPARK_VERSION}-bin-hadoop3/spark-* ${SPARK_HOME}/ 2>/dev/null || true && \
+    # Cleanup
+    rm -rf /tmp/spark-* && \
+    # Make scripts executable
+    chmod +x ${SPARK_HOME}/bin/* ${SPARK_HOME}/sbin/* 2>/dev/null || true && \
+    # Verify spark-submit exists
+    test -f ${SPARK_HOME}/bin/spark-submit || (echo "ERROR: spark-submit not found" && exit 1)
+
+
+# Switch back to airflow user
+USER airflow
+
+# Build arguments for Airflow
+ARG AIRFLOW_HOME
+ARG AIRFLOW_WEB_PORT
+
+# Install PySpark Python dependencies
+# RUN pip install --no-cache-dir py4j
+
+# Set Airflow environment variables
+ENV AIRFLOW_HOME=${AIRFLOW_HOME}
+ENV PYTHONUNBUFFERED=1
+
+# Create necessary directories
+RUN mkdir -p ${AIRFLOW_HOME}/dags \
+    ${AIRFLOW_HOME}/logs \
+    ${AIRFLOW_HOME}/plugins \
+    ${AIRFLOW_HOME}/config
+
+# Copy configuration files
+COPY --chown=airflow:root config/airflow/airflow.cfg ${AIRFLOW_HOME}/airflow.cfg
+COPY --chown=airflow:root config/spark/spark-defaults.conf ${SPARK_HOME}/conf/
+COPY --chown=airflow:root config/airflow/init-airflow.sh ${AIRFLOW_HOME}/init-airflow.sh
+RUN chmod +x ${AIRFLOW_HOME}/init-airflow.sh
+
+WORKDIR ${AIRFLOW_HOME}
+
+# Expose Airflow webserver port (default 8080, can be overridden via docker-compose)
+EXPOSE 8080
+

@@ -1,0 +1,184 @@
+x-airflow-common: &airflow-common
+  image: ${AIRFLOW_IMAGE_NAME}:${AIRFLOW_IMAGE_TAG}
+  environment: &airflow-env
+    - AIRFLOW_HOME=${AIRFLOW_HOME}
+    - AIRFLOW__CORE__EXECUTOR=${AIRFLOW_EXECUTOR}
+    - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${AIRFLOW_POSTGRES_USER}:${AIRFLOW_POSTGRES_PASSWORD}@${AIRFLOW_POSTGRES_HOST}:${POSTGRES_PORT_CONTAINER}/${AIRFLOW_POSTGRES_DB}
+    - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY}
+    - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=${AIRFLOW_DAGS_PAUSED_AT_CREATION}
+    - AIRFLOW__CORE__LOAD_EXAMPLES=${AIRFLOW_LOAD_EXAMPLES}
+    - AIRFLOW__API__AUTH__JWT_SECRET=${AIRFLOW_JWT_SECRET}
+    - SPARK_HOME=${SPARK_HOME}
+    - SPARK_MASTER=${SPARK_MASTER}
+    - TZ=${TZ}
+  volumes: &airflow-volumes
+    - airflow-dags:${AIRFLOW_HOME}/dags
+    - airflow-logs:${AIRFLOW_HOME}/logs
+    - airflow-plugins:${AIRFLOW_HOME}/plugins
+    - ./config/airflow/airflow.cfg:${AIRFLOW_HOME}/airflow.cfg
+  networks:
+    - hadoop-network
+  extra_hosts:
+    - "${HOST_DOCKER_INTERNAL}:host-gateway"
+
+services:
+
+  # Shared Airflow image with Spark client - built once and reused by all Airflow services
+  # This service builds the image and exits immediately
+  airflow-image:
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile.airflow-spark
+      args:
+        AIRFLOW_VERSION: ${AIRFLOW_VERSION}
+        AIRFLOW_PYTHON_VERSION: ${AIRFLOW_PYTHON_VERSION}
+        JAVA_VERSION: ${JAVA_VERSION}
+        JAVA_HOME_PATH: ${JAVA_HOME_PATH}
+        SPARK_VERSION: ${SPARK_VERSION}
+        SPARK_HOME: ${SPARK_HOME}
+        PYSPARK_PYTHON: ${PYSPARK_PYTHON}
+        PYSPARK_DRIVER_PYTHON: ${PYSPARK_DRIVER_PYTHON}
+        AIRFLOW_HOME: ${AIRFLOW_HOME}
+        AIRFLOW_WEB_PORT: ${AIRFLOW_WEB_PORT}
+    image: ${AIRFLOW_IMAGE_NAME}:${AIRFLOW_IMAGE_TAG}
+    # Exit immediately after build - this service only builds the image
+    entrypoint: ["echo", "image built successfully"]
+    restart: "no"
+
+  # PostgreSQL for Airflow metadata
+  airflow-postgres:
+    image: postgres:${POSTGRES_VERSION}
+    hostname: ${AIRFLOW_POSTGRES_HOST}
+    container_name: ${AIRFLOW_POSTGRES_CONTAINER_NAME}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${AIRFLOW_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${AIRFLOW_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${AIRFLOW_POSTGRES_DB}
+      TZ: ${TZ}
+      PGTZ: ${TZ}
+    ports:
+      - "${AIRFLOW_POSTGRES_PORT}:${POSTGRES_PORT_CONTAINER}"
+    volumes:
+      - airflow-postgres-data:/var/lib/postgresql/data
+      - ./config/postgres/init-airflow-postgres.sh:/docker-entrypoint-initdb.d/01-init-databases.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${AIRFLOW_POSTGRES_USER} -d ${AIRFLOW_POSTGRES_DB}"]
+      interval: ${HEALTHCHECK_INTERVAL}
+      timeout: ${HEALTHCHECK_TIMEOUT}
+      retries: ${HEALTHCHECK_RETRIES}
+      start_period: ${HEALTHCHECK_START_PERIOD}
+    networks:
+      - hadoop-network
+    deploy:
+      resources:
+        limits:
+          memory: ${POSTGRES_MEMORY_LIMIT}
+        reservations:
+          memory: ${POSTGRES_MEMORY_RESERVATION}
+
+  # Airflow initialization (one-time setup)
+  airflow-init:
+    <<: *airflow-common
+    depends_on:
+      airflow-image:
+        condition: service_completed_successfully
+      airflow-postgres:
+        condition: service_healthy
+    container_name: ${AIRFLOW_INIT_CONTAINER_NAME}
+    hostname: ${AIRFLOW_INIT_HOSTNAME}
+    entrypoint: /bin/bash
+    volumes:
+      - airflow-dags:${AIRFLOW_HOME}/dags
+      - airflow-logs:${AIRFLOW_HOME}/logs
+      - airflow-plugins:${AIRFLOW_HOME}/plugins
+      - ./config/airflow/airflow.cfg:${AIRFLOW_HOME}/airflow.cfg
+    command: -c "${AIRFLOW_HOME}/init-airflow.sh"
+    restart: "no"
+
+  # Airflow API Server (Web UI) - Airflow 3.x uses api-server
+  airflow-api-server:
+    <<: *airflow-common
+    depends_on:
+      airflow-image:
+        condition: service_completed_successfully
+      airflow-postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    container_name: ${AIRFLOW_API_SERVER_CONTAINER_NAME}
+    hostname: ${AIRFLOW_API_SERVER_HOSTNAME}
+    ports:
+      - "${AIRFLOW_WEB_PORT}:${AIRFLOW_WEB_PORT_CONTAINER}"
+    command: api-server
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:${AIRFLOW_WEB_PORT_CONTAINER}/api/v2/monitor/health || exit 1"]
+      interval: ${HEALTHCHECK_INTERVAL}
+      timeout: ${HEALTHCHECK_TIMEOUT}
+      retries: ${HEALTHCHECK_RETRIES}
+      start_period: ${AIRFLOW_HEALTHCHECK_START_PERIOD}
+    deploy:
+      resources:
+        limits:
+          memory: ${AIRFLOW_API_SERVER_MEMORY_LIMIT}
+        reservations:
+          memory: ${AIRFLOW_API_SERVER_MEMORY_RESERVATION}
+
+  # Airflow DAG Processor - required in Airflow 3.x
+  airflow-dag-processor:
+    <<: *airflow-common
+    depends_on:
+      airflow-image:
+        condition: service_completed_successfully
+      airflow-postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    container_name: ${AIRFLOW_DAG_PROCESSOR_CONTAINER_NAME}
+    hostname: ${AIRFLOW_DAG_PROCESSOR_HOSTNAME}
+    command: dag-processor
+    deploy:
+      resources:
+        limits:
+          memory: ${AIRFLOW_DAG_PROCESSOR_MEMORY_LIMIT}
+        reservations:
+          memory: ${AIRFLOW_DAG_PROCESSOR_MEMORY_RESERVATION}
+
+  # Airflow Scheduler
+  airflow-scheduler:
+    <<: *airflow-common
+    depends_on:
+      airflow-image:
+        condition: service_completed_successfully
+      airflow-postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-api-server:
+        condition: service_started
+      airflow-dag-processor:
+        condition: service_started
+    container_name: ${AIRFLOW_SCHEDULER_CONTAINER_NAME}
+    hostname: ${AIRFLOW_SCHEDULER_HOSTNAME}
+    command: scheduler
+    deploy:
+      resources:
+        limits:
+          memory: ${AIRFLOW_SCHEDULER_MEMORY_LIMIT}
+        reservations:
+          memory: ${AIRFLOW_SCHEDULER_MEMORY_RESERVATION}
+
+volumes:
+  airflow-postgres-data:
+  airflow-dags:
+  airflow-logs:
+  airflow-plugins:
+
+networks:
+  hadoop-network:
+    driver: ${NETWORK_DRIVER}
+    name: ${NETWORK_NAME}
+    # Use external: true if network already exists from bigdata-stack-java8
+    # Set to false if creating new network
+    external: ${NETWORK_EXTERNAL}
+
