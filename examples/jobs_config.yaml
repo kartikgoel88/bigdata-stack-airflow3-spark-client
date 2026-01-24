@@ -1,0 +1,102 @@
+# Job Configuration for Airflow DAG
+# This YAML file defines 10 jobs with their dependencies and execution details
+
+jobs:
+  # Job 1: Entry point - no dependencies
+  - id: job_001
+    name: "Data Extraction Job"
+    operator: "bash"
+    command: "echo 'Extracting data from source' && sleep 2"
+    dependencies: []
+    
+  # Job 2: Depends on job_001 (1-to-1)
+  - id: job_002
+    name: "Data Validation Job"
+    operator: "bash"
+    command: "echo 'Validating extracted data' && sleep 2"
+    dependencies:
+      - job_001
+    
+  # Job 3: Depends on job_001 (1-to-1, parallel with job_002)
+  - id: job_003
+    name: "Data Transformation Job A"
+    operator: "bash"
+    command: "echo 'Transforming data - branch A' && sleep 2"
+    dependencies:
+      - job_001
+    
+  # Job 4: Depends on job_002 (1-to-1)
+  - id: job_004
+    name: "Data Enrichment Job"
+    operator: "bash"
+    command: "echo 'Enriching validated data' && sleep 2"
+    dependencies:
+      - job_002
+    
+  # Job 5: Depends on job_003 (1-to-1)
+  - id: job_005
+    name: "Data Transformation Job B"
+    operator: "bash"
+    command: "echo 'Transforming data - branch B' && sleep 2"
+    dependencies:
+      - job_003
+    
+  # Job 6: Depends on multiple jobs (many-to-1) - job_002 and job_003
+  - id: job_006
+    name: "Data Aggregation Job"
+    operator: "spark"
+    application: "/path/to/spark/aggregation.py"
+    master: "spark://spark-master:7077"
+    dependencies:
+      - job_002
+      - job_003
+    
+  # Job 7: Depends on multiple jobs (many-to-1) - job_004 and job_005
+  - id: job_007
+    name: "Data Merge Job"
+    operator: "spark"
+    application: "/path/to/spark/merge.py"
+    master: "spark://spark-master:7077"
+    dependencies:
+      - job_004
+      - job_005
+    
+  # Job 8: Depends on multiple jobs (many-to-1) - job_006 and job_007
+  - id: job_008
+    name: "Final Processing Job"
+    operator: "spark"
+    application: "/path/to/spark/final_process.py"
+    master: "spark://spark-master:7077"
+    dependencies:
+      - job_006
+      - job_007
+    
+  # Job 9: Depends on job_008 (1-to-1)
+  - id: job_009
+    name: "Data Quality Check Job"
+    operator: "bash"
+    command: "echo 'Running quality checks' && sleep 2"
+    dependencies:
+      - job_008
+    
+  # Job 10: Depends on multiple jobs (many-to-1) - job_008 and job_009
+  - id: job_010
+    name: "Data Loading Job"
+    operator: "bash"
+    command: "echo 'Loading processed data to destination' && sleep 2"
+    dependencies:
+      - job_008
+      - job_009
+
+# DAG Configuration
+dag_config:
+  dag_id: "yaml_based_jobs"
+  description: "DAG with 10 jobs defined in YAML - runs 3 times a day"
+  schedule: "0 */8 * * *"  # Every 8 hours = 3 times a day (00:00, 08:00, 16:00)
+  start_date: "2024-01-01"
+  catchup: false
+  tags:
+    - "yaml-config"
+    - "3x-daily"
+    - "10-jobs"
+
