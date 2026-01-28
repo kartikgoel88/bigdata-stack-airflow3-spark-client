@@ -1,5 +1,16 @@
 # Job Configuration for Airflow DAG
-# This YAML file defines 10 jobs with their dependencies and execution details
+# This YAML file defines jobs with their dependencies and execution details
+#
+# Dependency Types Supported:
+# 1. Internal Dependencies: References to other jobs in this DAG (e.g., "job_001")
+# 2. External Dependencies: Dependencies on external systems or other DAGs
+#    - external_task_sensor: Wait for a task in another DAG
+#    - file_sensor: Wait for a file to appear in storage (S3, HDFS, etc.)
+#    - http_sensor: Wait for an external API/service to be ready
+#    - sql_sensor: Wait for data to be available in an external database
+#
+# Note: External dependency operators require additional implementation in the DAG code
+# to create the appropriate sensor operators (ExternalTaskSensor, FileSensor, etc.)
 
 jobs:
   # Job 1: Entry point - no dependencies
@@ -87,6 +98,81 @@ jobs:
     dependencies:
       - job_008
       - job_009
+
+  # ============================================================================
+  # External Dependencies Examples
+  # ============================================================================
+  
+  # Job 11: External DAG dependency - waits for another DAG's task to complete
+  # This job depends on a task from a different DAG (e.g., upstream ETL pipeline)
+  - id: job_011
+    name: "Wait for External ETL Pipeline"
+    operator: "external_task_sensor"
+    external_dag_id: "upstream_etl_pipeline"
+    external_task_id: "data_ingestion_complete"
+    timeout: 3600  # Wait up to 1 hour
+    poke_interval: 60  # Check every 60 seconds
+    dependencies:
+      - job_010
+  
+  # Job 12: External file dependency - waits for a file to appear in storage
+  # This job waits for an external file (e.g., S3, HDFS, or local filesystem)
+  - id: job_012
+    name: "Wait for External Data File"
+    operator: "file_sensor"
+    filepath: "/data/external/input/daily_export.csv"
+    fs_conn_id: "fs_default"  # Filesystem connection (S3, HDFS, etc.)
+    timeout: 7200  # Wait up to 2 hours
+    poke_interval: 120  # Check every 2 minutes
+    dependencies:
+      - job_011
+  
+  # Job 13: External API dependency - waits for external API to be ready
+  # This job waits for an external service/API to be available
+  - id: job_013
+    name: "Wait for External API Service"
+    operator: "http_sensor"
+    http_conn_id: "external_api"
+    endpoint: "/health"
+    timeout: 1800  # Wait up to 30 minutes
+    poke_interval: 30  # Check every 30 seconds
+    dependencies:
+      - job_011
+  
+  # Job 14: External database dependency - waits for database table to be ready
+  # This job waits for data to be available in an external database
+  - id: job_014
+    name: "Wait for External Database Table"
+    operator: "sql_sensor"
+    conn_id: "external_db"
+    sql: "SELECT COUNT(*) FROM staging.raw_data WHERE date = CURRENT_DATE"
+    timeout: 3600  # Wait up to 1 hour
+    poke_interval: 60  # Check every 60 seconds
+    dependencies:
+      - job_011
+  
+  # Job 15: Depends on both external file and external DAG (many-to-1 with external deps)
+  # This job waits for multiple external dependencies before proceeding
+  - id: job_015
+    name: "Process External Data Sources"
+    operator: "spark"
+    application: "/path/to/spark/process_external.py"
+    master: "spark://spark-master:7077"
+    dependencies:
+      - job_012  # External file dependency
+      - job_013  # External API dependency
+      - job_014  # External database dependency
+  
+  # Job 16: Mixed dependencies - internal job + external DAG dependency
+  # This job depends on both internal jobs and external DAG completion
+  - id: job_016
+    name: "Final Aggregation with External Data"
+    operator: "spark"
+    application: "/path/to/spark/final_aggregation.py"
+    master: "spark://spark-master:7077"
+    dependencies:
+      - job_015  # Internal dependency
+      - job_011  # External DAG dependency (already completed)
 
 # DAG Configuration
 dag_config:

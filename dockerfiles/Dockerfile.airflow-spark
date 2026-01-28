@@ -13,6 +13,20 @@ ARG SPARK_HOME
 ARG JAVA_HOME_PATH
 ARG PYSPARK_PYTHON
 ARG PYSPARK_DRIVER_PYTHON
+# Proxy and certificate build arguments (optional)
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ARG REQUESTS_CA_BUNDLE
+ARG CURL_CA_BUNDLE
+
+# Set proxy environment variables for build-time (apt-get, wget, curl)
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    http_proxy=${HTTP_PROXY} \
+    https_proxy=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY} \
+    no_proxy=${NO_PROXY}
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -20,7 +34,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openjdk-${JAVA_VERSION}-jre-headless \
     wget \
     curl \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# Copy corporate CA certificate if provided (for build-time SSL verification)
+# Usage: Mount certificate file or copy it during build
+# COPY --chown=root:root corporate-ca.crt /usr/local/share/ca-certificates/corporate-ca.crt
+# RUN update-ca-certificates || true
 
 # Set environment variables
 ENV SPARK_VERSION=${SPARK_VERSION} \
@@ -72,6 +92,17 @@ ARG AIRFLOW_WEB_PORT
 # Set Airflow environment variables
 ENV AIRFLOW_HOME=${AIRFLOW_HOME}
 ENV PYTHONUNBUFFERED=1
+# Proxy and certificate runtime environment variables (can be overridden via docker-compose)
+ENV HTTP_PROXY=${HTTP_PROXY:-} \
+    HTTPS_PROXY=${HTTPS_PROXY:-} \
+    http_proxy=${HTTP_PROXY:-} \
+    https_proxy=${HTTPS_PROXY:-} \
+    NO_PROXY=${NO_PROXY:-localhost,127.0.0.1,.local} \
+    no_proxy=${NO_PROXY:-localhost,127.0.0.1,.local} \
+    REQUESTS_CA_BUNDLE=${REQUESTS_CA_BUNDLE:-} \
+    CURL_CA_BUNDLE=${CURL_CA_BUNDLE:-} \
+    SSL_CERT_FILE=${SSL_CERT_FILE:-} \
+    PYTHONHTTPSVERIFY=${PYTHONHTTPSVERIFY:-}
 
 # Create necessary directories
 RUN mkdir -p ${AIRFLOW_HOME}/dags \

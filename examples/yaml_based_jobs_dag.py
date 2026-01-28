@@ -1,7 +1,7 @@
 """
 Airflow DAG that reads job definitions from YAML file
-Supports both BashOperator and SparkSubmitOperator with TaskGroups
-Jobs can have 1-to-1 or many-to-1 dependencies
+Supports BashOperator, SparkSubmitOperator, and External Dependency Sensors with TaskGroups
+Jobs can have 1-to-1 or many-to-1 dependencies (internal and external)
 Spark jobs use dynamic task mapping
 Runs 3 times a day
 """
@@ -12,6 +12,10 @@ from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from airflow.operators.python import PythonOperator
+from airflow.sensors.external_task import ExternalTaskSensor
+from airflow.sensors.filesystem import FileSensor
+from airflow.providers.http.sensors.http import HttpSensor
+from airflow.providers.common.sql.sensors.sql import SqlSensor
 from airflow.utils.task_group import TaskGroup
 from datetime import datetime, timedelta
 from typing import Dict, List, Any
@@ -57,14 +61,18 @@ def organize_jobs_into_groups(jobs: List[Dict[str, Any]]) -> Dict[str, List[Dict
         'transformation': [],
         'spark_processing': [],
         'quality_loading': [],
+        'external_dependencies': [],
     }
     
     for job in jobs:
         job_id = job.get('id', '')
         operator_type = job.get('operator', 'bash').lower()
         
-        # Categorize jobs based on ID patterns or operator type
-        if '001' in job_id or '002' in job_id:
+        # Categorize jobs based on operator type first (external dependencies)
+        if operator_type in ['external_task_sensor', 'file_sensor', 'http_sensor', 'sql_sensor']:
+            groups['external_dependencies'].append(job)
+        # Then categorize by ID patterns or operator type
+        elif '001' in job_id or '002' in job_id:
             groups['extraction_validation'].append(job)
         elif '003' in job_id or '004' in job_id or '005' in job_id:
             groups['transformation'].append(job)
@@ -93,9 +101,11 @@ tags = dag_config.get('tags', ['yaml-config', 'taskgroups', 'dynamic-mapping'])
 # Organize jobs into groups
 job_groups = organize_jobs_into_groups(jobs)
 
-# Separate Spark jobs for dynamic mapping
+# Separate jobs by operator type
 spark_jobs = [job for job in jobs if job.get('operator', '').lower() == 'spark']
 bash_jobs = [job for job in jobs if job.get('operator', '').lower() == 'bash']
+external_jobs = [job for job in jobs if job.get('operator', '').lower() in 
+                 ['external_task_sensor', 'file_sensor', 'http_sensor', 'sql_sensor']]
 
 # Create the DAG
 with DAG(
@@ -206,6 +216,57 @@ with DAG(
             )
     
     # ============================================================================
+    # TaskGroup 5: External Dependencies (Sensors)
+    # ============================================================================
+    with TaskGroup(group_id='external_dependencies', tooltip='External Dependency Sensors') as external_group:
+        for job in external_jobs:
+            job_id = job.get('id')
+            job_name = job.get('name', job_id)
+            operator_type = job.get('operator', '').lower()
+            
+            if operator_type == 'external_task_sensor':
+                # ExternalTaskSensor - waits for a task in another DAG
+                tasks[job_id] = ExternalTaskSensor(
+                    task_id=job_id,
+                    external_dag_id=job.get('external_dag_id'),
+                    external_task_id=job.get('external_task_id'),
+                    timeout=job.get('timeout', 3600),
+                    poke_interval=job.get('poke_interval', 60),
+                    mode='poke',  # or 'reschedule'
+                )
+            
+            elif operator_type == 'file_sensor':
+                # FileSensor - waits for a file to appear
+                tasks[job_id] = FileSensor(
+                    task_id=job_id,
+                    filepath=job.get('filepath'),
+                    fs_conn_id=job.get('fs_conn_id', 'fs_default'),
+                    timeout=job.get('timeout', 3600),
+                    poke_interval=job.get('poke_interval', 60),
+                )
+            
+            elif operator_type == 'http_sensor':
+                # HttpSensor - waits for HTTP endpoint to be available
+                tasks[job_id] = HttpSensor(
+                    task_id=job_id,
+                    http_conn_id=job.get('http_conn_id'),
+                    endpoint=job.get('endpoint', '/'),
+                    timeout=job.get('timeout', 1800),
+                    poke_interval=job.get('poke_interval', 30),
+                    method='GET',
+                )
+            
+            elif operator_type == 'sql_sensor':
+                # SqlSensor - waits for SQL condition to be true
+                tasks[job_id] = SqlSensor(
+                    task_id=job_id,
+                    conn_id=job.get('conn_id'),
+                    sql=job.get('sql'),
+                    timeout=job.get('timeout', 3600),
+                    poke_interval=job.get('poke_interval', 60),
+                )
+    
+    # ============================================================================
     # Set up dependencies between tasks and groups
     # ============================================================================
     for job in jobs:
@@ -232,4 +293,11 @@ with DAG(
     # Note: TaskGroup dependencies are handled by individual task dependencies above
     # TaskGroups provide visual organization in the Airflow UI but don't enforce execution order
     # Individual task dependencies (set above) control the actual execution flow
+    #
+    # External Dependencies:
+    # - ExternalTaskSensor: Waits for tasks in other DAGs to complete
+    # - FileSensor: Waits for files to appear in storage (S3, HDFS, local filesystem)
+    # - HttpSensor: Waits for HTTP endpoints to be available
+    # - SqlSensor: Waits for SQL conditions to be met in databases
+    # All external dependencies can be mixed with internal job dependencies
 

@@ -11,6 +11,17 @@ x-airflow-common: &airflow-common
     - SPARK_HOME=${SPARK_HOME}
     - SPARK_MASTER=${SPARK_MASTER}
     - TZ=${TZ}
+    # Proxy and certificate configuration (optional - set in .env if needed)
+    - HTTP_PROXY=${HTTP_PROXY:-}
+    - HTTPS_PROXY=${HTTPS_PROXY:-}
+    - http_proxy=${HTTP_PROXY:-}
+    - https_proxy=${HTTPS_PROXY:-}
+    - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1,.local}
+    - no_proxy=${NO_PROXY:-localhost,127.0.0.1,.local}
+    - REQUESTS_CA_BUNDLE=${REQUESTS_CA_BUNDLE:-}
+    - CURL_CA_BUNDLE=${CURL_CA_BUNDLE:-}
+    - SSL_CERT_FILE=${SSL_CERT_FILE:-}
+    - PYTHONHTTPSVERIFY=${PYTHONHTTPSVERIFY:-}
   volumes: &airflow-volumes
     - airflow-dags:${AIRFLOW_HOME}/dags
     - airflow-logs:${AIRFLOW_HOME}/logs
@@ -40,6 +51,12 @@ services:
         PYSPARK_DRIVER_PYTHON: ${PYSPARK_DRIVER_PYTHON}
         AIRFLOW_HOME: ${AIRFLOW_HOME}
         AIRFLOW_WEB_PORT: ${AIRFLOW_WEB_PORT}
+        # Proxy and certificate configuration for build-time (optional)
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,.local}
+        REQUESTS_CA_BUNDLE: ${REQUESTS_CA_BUNDLE:-}
+        CURL_CA_BUNDLE: ${CURL_CA_BUNDLE:-}
     image: ${AIRFLOW_IMAGE_NAME}:${AIRFLOW_IMAGE_TAG}
     # Exit immediately after build - this service only builds the image
     entrypoint: ["echo", "image built successfully"]
